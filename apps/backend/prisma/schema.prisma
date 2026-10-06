@@ -1,0 +1,654 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum PlanType {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum RoleName {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+enum EnvironmentType {
+  DEV
+  STAGING
+  PRODUCTION
+  CUSTOM
+}
+
+enum PipelineStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum TriggerType {
+  PUSH
+  PULL_REQUEST
+  SCHEDULE
+  MANUAL
+}
+
+enum RunStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum StageType {
+  BUILD
+  TEST
+  DEPLOY
+  RELEASE
+  CUSTOM
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum IncidentSeverity {
+  P1
+  P2
+  P3
+  P4
+}
+
+enum IncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  MITIGATED
+  RESOLVED
+}
+
+enum IntegrationType {
+  GITHUB
+  GITLAB
+  BITBUCKET
+  SLACK
+  TEAMS
+  AWS
+  GCP
+  AZURE
+  TERRAFORM
+  PAGERDUTY
+  OPSGENIE
+  PROMETHEUS
+  GRAFANA
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  INACTIVE
+  ERROR
+}
+
+enum NotificationType {
+  ALERT
+  DEPLOYMENT
+  APPROVAL
+  INCIDENT
+  SYSTEM
+}
+
+// ─── MODELS ───────────────────────────────────────────────────────────────────
+
+model Organization {
+  id         String      @id @default(uuid())
+  name       String
+  slug       String      @unique
+  planType   PlanType    @default(FREE)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  workspaces Workspace[]
+
+  @@map("organizations")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  fullName     String
+  passwordHash String?
+  avatarUrl    String?
+  mfaEnabled   Boolean   @default(false)
+  mfaSecret    String?
+  provider     String?   // 'local' | 'google' | 'github' | 'gitlab'
+  providerId   String?
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  workspaceMembers WorkspaceMember[]
+  userRoles        UserRole[]
+  notifications    Notification[]
+  createdPipelines Pipeline[]
+  stageApprovals   StageApproval[]
+  deployments      Deployment[]
+  assignedIncidents Incident[]       @relation("AssignedIncidents")
+  incidentEvents   IncidentEvent[]
+  onCallSchedules  OnCallSchedule[]
+  auditLogs        AuditLog[]
+  createdDashboards Dashboard[]
+  refreshTokens    RefreshToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  name           RoleName @unique
+  permissionsJson Json    @default("{}")
+  isSystem       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  workspaceMembers WorkspaceMember[]
+  userRoles        UserRole[]
+
+  @@map("roles")
+}
+
+model Workspace {
+  id             String   @id @default(uuid())
+  orgId          String
+  name           String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization    Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  members         WorkspaceMember[]
+  userRoles       UserRole[]
+  pipelines       Pipeline[]
+  environments    Environment[]
+  services        Service[]
+  incidents       Incident[]
+  alertRules      AlertRule[]
+  k8sClusters     K8sCluster[]
+  dashboards      Dashboard[]
+  integrations    Integration[]
+  auditLogs       AuditLog[]
+  infrastructures Infrastructure[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String   @id @default(uuid())
+  workspaceId String
+  userId      String
+  roleId      String
+  joinedAt    DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+model UserRole {
+  id          String   @id @default(uuid())
+  userId      String
+  roleId      String
+  workspaceId String
+  grantedAt   DateTime @default(now())
+  grantedBy   String?
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id])
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@map("user_roles")
+}
+
+model Environment {
+  id          String          @id @default(uuid())
+  workspaceId String
+  name        String
+  type        EnvironmentType @default(DEV)
+  isProtected Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  variables   EnvVariable[]
+  deployments Deployment[]
+
+  @@map("environments")
+}
+
+model EnvVariable {
+  id        String   @id @default(uuid())
+  envId     String
+  key       String
+  valueEnc  String
+  isSecret  Boolean  @default(false)
+  version   Int      @default(1)
+  updatedAt DateTime @updatedAt
+
+  environment Environment @relation(fields: [envId], references: [id], onDelete: Cascade)
+
+  @@unique([envId, key])
+  @@map("env_variables")
+}
+
+model Pipeline {
+  id          String         @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?
+  configYaml  String?
+  triggerType TriggerType    @default(MANUAL)
+  status      PipelineStatus @default(ACTIVE)
+  createdBy   String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator   User          @relation(fields: [createdBy], references: [id])
+  runs      PipelineRun[]
+
+  @@map("pipelines")
+}
+
+model PipelineRun {
+  id          String    @id @default(uuid())
+  pipelineId  String
+  runNumber   Int
+  status      RunStatus @default(QUEUED)
+  triggeredBy String?
+  branch      String?
+  commitSha   String?
+  commitMsg   String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  durationMs  Int?
+  createdAt   DateTime  @default(now())
+
+  pipeline    Pipeline        @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stages      PipelineStage[]
+  deployments Deployment[]
+
+  @@unique([pipelineId, runNumber])
+  @@index([pipelineId, status, startedAt])
+  @@map("pipeline_runs")
+}
+
+model PipelineStage {
+  id          String    @id @default(uuid())
+  runId       String
+  name        String
+  type        StageType @default(CUSTOM)
+  status      RunStatus @default(QUEUED)
+  orderIndex  Int
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  logUrl      String?
+  errorMsg    String?
+
+  run       PipelineRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  approvals StageApproval[]
+
+  @@map("pipeline_stages")
+}
+
+model StageApproval {
+  id         String         @id @default(uuid())
+  stageId    String
+  approverId String
+  status     ApprovalStatus @default(PENDING)
+  comment    String?
+  decidedAt  DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime       @default(now())
+
+  stage    PipelineStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  approver User          @relation(fields: [approverId], references: [id])
+
+  @@map("stage_approvals")
+}
+
+model Deployment {
+  id            String    @id @default(uuid())
+  pipelineRunId String
+  environmentId String
+  version       String
+  artifactUrl   String?
+  status        RunStatus @default(QUEUED)
+  deployedBy    String
+  deployedAt    DateTime  @default(now())
+  rolledBack    Boolean   @default(false)
+  rollbackTo    String?
+
+  pipelineRun PipelineRun @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+  environment Environment @relation(fields: [environmentId], references: [id])
+  deployedByUser User     @relation(fields: [deployedBy], references: [id])
+
+  @@index([environmentId, deployedAt])
+  @@map("deployments")
+}
+
+model Service {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  name          String
+  description   String?
+  repositoryUrl String?
+  language      String?
+  ownerTeam     String?
+  status        String   @default("active")
+  createdAt     DateTime @default(now())
+
+  workspace  Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  metrics    ServiceMetric[]
+  incidents  Incident[]
+  alertRules AlertRule[]
+
+  @@map("services")
+}
+
+model ServiceMetric {
+  id          String   @id @default(uuid())
+  serviceId   String
+  metricName  String
+  metricValue Float
+  timestamp   DateTime @default(now())
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, metricName, timestamp])
+  @@map("service_metrics")
+}
+
+model Infrastructure {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  type        String
+  provider    String
+  region      String?
+  status      String   @default("active")
+  configJson  Json     @default("{}")
+  costMonthly Float?
+  lastDriftAt DateTime?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("infrastructures")
+}
+
+model Incident {
+  id              String           @id @default(uuid())
+  workspaceId     String
+  serviceId       String?
+  assignedTo      String?
+  title           String
+  description     String?
+  severity        IncidentSeverity @default(P3)
+  status          IncidentStatus   @default(OPEN)
+  acknowledgedAt  DateTime?
+  resolvedAt      DateTime?
+  mttrSeconds     Int?
+  mttaSeconds     Int?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  workspace  Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  service    Service?        @relation(fields: [serviceId], references: [id])
+  assignee   User?           @relation("AssignedIncidents", fields: [assignedTo], references: [id])
+  events     IncidentEvent[]
+  postMortem PostMortem?
+  alerts     Alert[]
+
+  @@index([workspaceId, severity, status])
+  @@map("incidents")
+}
+
+model IncidentEvent {
+  id          String   @id @default(uuid())
+  incidentId  String
+  eventType   String
+  description String
+  actorId     String?
+  createdAt   DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  actor    User?    @relation(fields: [actorId], references: [id])
+
+  @@map("incident_events")
+}
+
+model PostMortem {
+  id            String   @id @default(uuid())
+  incidentId    String   @unique
+  rootCause     String?
+  impact        String?
+  timelineJson  Json     @default("[]")
+  actionItems   Json     @default("[]")
+  status        String   @default("draft")
+  authorId      String?
+  publishedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@map("post_mortems")
+}
+
+model AlertRule {
+  id          String   @id @default(uuid())
+  workspaceId String
+  serviceId   String?
+  name        String
+  condition   String
+  threshold   Float?
+  severity    IncidentSeverity @default(P3)
+  channel     String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  service   Service?  @relation(fields: [serviceId], references: [id])
+  alerts    Alert[]
+
+  @@map("alert_rules")
+}
+
+model Alert {
+  id         String   @id @default(uuid())
+  ruleId     String
+  incidentId String?
+  status     String   @default("firing")
+  firedAt    DateTime @default(now())
+  resolvedAt DateTime?
+  labelsJson Json     @default("{}")
+
+  rule     AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  incident Incident? @relation(fields: [incidentId], references: [id])
+
+  @@index([ruleId, status, firedAt])
+  @@map("alerts")
+}
+
+model OnCallSchedule {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  userId       String
+  startTime    DateTime
+  endTime      DateTime
+  rotationType String   @default("weekly")
+  isActive     Boolean  @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("on_call_schedules")
+}
+
+model K8sCluster {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  provider    String
+  version     String?
+  endpoint    String?
+  status      String   @default("active")
+  nodeCount   Int      @default(0)
+  cpuTotal    Float?
+  memTotal    Float?
+  createdAt   DateTime @default(now())
+
+  workspace  Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  namespaces K8sNamespace[]
+
+  @@map("k8s_clusters")
+}
+
+model K8sNamespace {
+  id        String   @id @default(uuid())
+  clusterId String
+  name      String
+  cpuLimit  Float?
+  memLimit  Float?
+  podCount  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  cluster K8sCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  pods    K8sPod[]
+
+  @@map("k8s_namespaces")
+}
+
+model K8sPod {
+  id           String   @id @default(uuid())
+  namespaceId  String
+  name         String
+  status       String   @default("running")
+  cpuUsage     Float?
+  memUsage     Float?
+  restartCount Int      @default(0)
+  image        String?
+  startedAt    DateTime?
+
+  namespace K8sNamespace @relation(fields: [namespaceId], references: [id], onDelete: Cascade)
+
+  @@index([namespaceId, status])
+  @@map("k8s_pods")
+}
+
+model Dashboard {
+  id          String   @id @default(uuid())
+  workspaceId String
+  createdBy   String
+  name        String
+  description String?
+  isTemplate  Boolean  @default(false)
+  layoutJson  Json     @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator   User              @relation(fields: [createdBy], references: [id])
+  widgets   DashboardWidget[]
+
+  @@map("dashboards")
+}
+
+model DashboardWidget {
+  id           String   @id @default(uuid())
+  dashboardId  String
+  type         String
+  title        String
+  query        String?
+  dataSource   String?
+  positionJson Json     @default("{}")
+  configJson   Json     @default("{}")
+
+  dashboard Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+
+  @@map("dashboard_widgets")
+}
+
+model Integration {
+  id          String            @id @default(uuid())
+  workspaceId String
+  type        IntegrationType
+  configEnc   String?
+  status      IntegrationStatus @default(INACTIVE)
+  lastSyncAt  DateTime?
+  createdAt   DateTime          @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("integrations")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  channel   String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String?
+  workspaceId  String?
+  action       String
+  resourceType String
+  resourceId   String?
+  detailsJson  Json     @default("{}")
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  user      User?      @relation(fields: [userId], references: [id])
+  workspace Workspace? @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@map("audit_logs")
+}
